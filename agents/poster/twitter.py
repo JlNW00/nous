@@ -1,6 +1,6 @@
 """X/Twitter poster agent — autonomous verdict posting + @mention response.
 
-SCOUT posts:
+NOUS posts:
 - Verdict threads when confidence >= threshold
 - Score-gated: Legitimate threads (score > 70) vs LARP callouts (score < 30)
 - Responds to @mentions with on-demand investigations
@@ -103,7 +103,7 @@ def post_verdict(self, case_id: str) -> dict:
 @celery_app.task(name="agents.poster.check_mentions", bind=True, max_retries=1)
 def check_mentions(self) -> dict:
     """
-    Poll X/Twitter for @mentions of SCOUT and respond with investigations.
+    Poll X/Twitter for @mentions of NOUS and respond with investigations.
     Runs every 5 minutes via Celery Beat.
     """
     if not settings.x_bearer_token or not settings.x_agent_username:
@@ -206,7 +206,7 @@ def investigate_and_reply(self, token_address: str, reply_to_id: str, author_id:
             f"{emoji} Investigation complete: {name}\n"
             f"Score: {score:.0f}/100 — {verdict.upper().replace('_', ' ')}\n\n"
             f"{summary[:180] if summary else 'See full report for details.'}\n\n"
-            f"Full report: [link]\n#SCOUT"
+            f"Full report: [link]\n#NOUS"
         )
 
         if len(reply_text) > 280:
@@ -226,7 +226,7 @@ def investigate_and_reply(self, token_address: str, reply_to_id: str, author_id:
 
 def _build_thread(project: Project, report: Report) -> list[str]:
     """
-    Build a SCOUT verdict thread. Tone varies by score.
+    Build a NOUS verdict thread. Tone varies by score.
 
     High score (>70): Legitimate signal thread
     Low score (<30): LARP/rug callout thread
@@ -251,7 +251,7 @@ def _build_thread(project: Project, report: Report) -> list[str]:
     thread = []
 
     # Tweet 1: Hook + verdict
-    hook = thread_hook or f"SCOUT investigated {name} {symbol}."
+    hook = thread_hook or f"NOUS investigated {name} {symbol}."
     tweet1 = (
         f"{emoji} {hook}\n\n"
         f"Score: {score:.0f}/100 — {verdict.upper().replace('_', ' ')}\n"
@@ -290,10 +290,10 @@ def _build_thread(project: Project, report: Report) -> list[str]:
         thread.append(_trim(f"UNVERIFIED\n\n{lines}"))
 
     # Tweet 7: CTA
-    cta_parts = [f"SCOUT — autonomous on-chain intelligence agent."]
+    cta_parts = [f"NOUS — autonomous on-chain intelligence agent."]
     if bags_launched and partner_cta:
         cta_parts.append(f"Trade on Bags: {partner_cta}")
-    cta_parts.append("#SCOUT #Solana #DYOR")
+    cta_parts.append("#NOUS #Solana #DYOR")
     thread.append(_trim("\n".join(cta_parts)))
 
     return thread

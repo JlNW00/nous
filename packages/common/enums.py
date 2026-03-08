@@ -140,3 +140,4 @@ class SignalName(str, enum.Enum):
     BAGS_LAUNCHED = "bags_launched"
     BAGS_LIFETIME_FEES = "bags_lifetime_fees"
     BAGS_TRADING_VOLUME = "bags_trading_volume"
+    NARRATIVE_PUMP_SIGNAL = "narrative_pump_signal"

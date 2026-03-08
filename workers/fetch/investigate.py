@@ -718,6 +718,89 @@ def _calculate_signals(
     db.add(sig)
     signals.append(sig)
 
+    # ── Early narrative pump signal ──────────────────────────────────
+    # Detects coordinated pump patterns: fresh token + price spike + volume anomaly
+    pair_created_at_ms = market.get("pair_created_at")  # Unix ms from DexScreener
+    price_change_1h = market.get("price_change", {}).get("1h") or 0
+    price_change_5m = market.get("price_change", {}).get("5m") or 0
+    volume_24h = market.get("total_volume_24h") or 0
+    liquidity_usd = market.get("total_liquidity_usd") or 0
+
+    if pair_created_at_ms is not None:
+        import time as _time
+        listing_age_days = (_time.time() - pair_created_at_ms / 1000) / 86400
+
+        # Risk factors: lower score = more pumpish
+        pump_risk = 0.0
+
+        # 1) Token age — very new tokens are inherently higher risk
+        if listing_age_days < 1:
+            pump_risk += 0.4   # < 24h old
+        elif listing_age_days < 3:
+            pump_risk += 0.25  # 1-3 days
+        elif listing_age_days < 7:
+            pump_risk += 0.1   # 1 week
+
+        # 2) Price spike in last hour (coordinated buy pressure)
+        try:
+            pc_1h = float(price_change_1h)
+            if pc_1h > 200:
+                pump_risk += 0.3
+            elif pc_1h > 100:
+                pump_risk += 0.2
+            elif pc_1h > 50:
+                pump_risk += 0.1
+        except (TypeError, ValueError):
+            pass
+
+        # 3) Extreme short-term spike (5m) = very coordinated entry
+        try:
+            pc_5m = float(price_change_5m)
+            if pc_5m > 50:
+                pump_risk += 0.2
+            elif pc_5m > 20:
+                pump_risk += 0.1
+        except (TypeError, ValueError):
+            pass
+
+        # 4) Volume/liquidity ratio anomaly (wash trading proxy)
+        if liquidity_usd > 0:
+            vol_liq_ratio = volume_24h / liquidity_usd
+            if vol_liq_ratio > 20:
+                pump_risk += 0.15
+            elif vol_liq_ratio > 10:
+                pump_risk += 0.08
+
+        # 5) High holder concentration on fresh token = insider pre-loading
+        top_holders = evidence.get("top_holders") or []
+        if top_holders and listing_age_days < 7:
+            top_pct = sum(h.get("pct_supply", 0) for h in top_holders[:5])
+            if top_pct > 80:
+                pump_risk += 0.2
+            elif top_pct > 60:
+                pump_risk += 0.1
+
+        # Clamp and invert: score=1 means organic, score=0 means coordinated pump
+        pump_risk = min(pump_risk, 1.0)
+        pump_score = round(1.0 - pump_risk, 3)
+
+        # Confidence increases with more signals available
+        raw_1h = market.get("price_change", {}).get("1h")
+        raw_5m = market.get("price_change", {}).get("5m")
+        has_price = raw_1h is not None or raw_5m is not None
+        has_volume = volume_24h > 0
+        pump_conf = 0.5 + (0.1 if has_price else 0) + (0.1 if has_volume else 0) + (0.1 if top_holders else 0)
+
+        sig = Signal(
+            case_id=case.case_id,
+            signal_name=SignalName.NARRATIVE_PUMP_SIGNAL.value,
+            signal_value=pump_score,
+            score_component="cross_signal_consistency",
+            confidence=round(pump_conf, 2),
+        )
+        db.add(sig)
+        signals.append(sig)
+
     # ── Repository age ───────────────────────────────────────────────
     github_repo = evidence.get("github_repo") or {}
     if github_repo.get("exists"):
@@ -864,7 +947,7 @@ def _run_ollama_reasoning(
         evidence_summary = "\n".join(evidence_parts) or "No evidence collected."
 
         system_prompt = (
-            "You are SCOUT — an autonomous on-chain intelligence agent. You investigate crypto "
+            "You are NOUS — an autonomous on-chain intelligence agent. You investigate crypto "
             "projects with the cold precision of a forensic analyst and the directness of someone "
             "who has seen every rug, every coordinated pump, every fake team.\n\n"
             "Your voice: clinical, direct, zero tolerance for ambiguity. You don't hedge. "
@@ -1019,7 +1102,7 @@ def _run_llm_reasoning(
         evidence_summary = "\n".join(evidence_parts) or "No evidence collected."
 
         system_prompt = (
-            "You are SCOUT — an autonomous on-chain intelligence agent. You investigate crypto "
+            "You are NOUS — an autonomous on-chain intelligence agent. You investigate crypto "
             "projects with the cold precision of a forensic analyst and the directness of someone "
             "who has seen every rug, every coordinated pump, every fake team.\n\n"
             "Your voice: clinical, direct, zero tolerance for ambiguity. You don't hedge. "

@@ -400,6 +400,77 @@ def calc_narrative_consistency(
     }
 
 
+def calc_narrative_pump_signal(
+    case_id: str, evidence_by_type: dict[str, list[RawEvidence]]
+) -> dict[str, Any] | None:
+    """
+    Detect coordinated narrative pump patterns: fresh listing + price spike + volume anomaly.
+    Score=1 means organic, score=0 means coordinated pump.
+    """
+    import time as _time
+
+    for ev in evidence_by_type.get("market", []):
+        pair_created_at_ms = ev.payload_json.get("pair_created_at")
+        if pair_created_at_ms is None:
+            continue
+
+        listing_age_days = (_time.time() - pair_created_at_ms / 1000) / 86400
+        price_change = ev.payload_json.get("price_change", {})
+        price_change_1h = price_change.get("1h") or 0
+        price_change_5m = price_change.get("5m") or 0
+        volume_24h = ev.payload_json.get("total_volume_24h") or 0
+        liquidity_usd = ev.payload_json.get("total_liquidity_usd") or 0
+
+        pump_risk = 0.0
+
+        if listing_age_days < 1:
+            pump_risk += 0.4
+        elif listing_age_days < 3:
+            pump_risk += 0.25
+        elif listing_age_days < 7:
+            pump_risk += 0.1
+
+        try:
+            pc_1h = float(price_change_1h)
+            if pc_1h > 200:
+                pump_risk += 0.3
+            elif pc_1h > 100:
+                pump_risk += 0.2
+            elif pc_1h > 50:
+                pump_risk += 0.1
+        except (TypeError, ValueError):
+            pass
+
+        try:
+            pc_5m = float(price_change_5m)
+            if pc_5m > 50:
+                pump_risk += 0.2
+            elif pc_5m > 20:
+                pump_risk += 0.1
+        except (TypeError, ValueError):
+            pass
+
+        if liquidity_usd > 0:
+            vol_liq_ratio = volume_24h / liquidity_usd
+            if vol_liq_ratio > 20:
+                pump_risk += 0.15
+            elif vol_liq_ratio > 10:
+                pump_risk += 0.08
+
+        pump_risk = min(pump_risk, 1.0)
+        pump_score = round(1.0 - pump_risk, 3)
+        pump_conf = 0.5 + (0.1 if price_change_1h else 0) + (0.1 if volume_24h > 0 else 0)
+
+        return {
+            "signal_name": SignalName.NARRATIVE_PUMP_SIGNAL.value,
+            "value": pump_score,
+            "score_component": "cross_signal_consistency",
+            "confidence": round(pump_conf, 2),
+            "evidence_refs": [ev.evidence_id],
+        }
+    return None
+
+
 # Registry of all calculators
 # NOTE: The primary signal path is investigate.py._calculate_signals() (sync pipeline).
 # This registry is used by the Celery task path as a secondary/async fallback.
@@ -413,5 +484,6 @@ SIGNAL_CALCULATORS = [
     calc_account_age_days,
     calc_backend_presence,
     calc_narrative_consistency,
+    calc_narrative_pump_signal,
     # TODO: calc_related_rug_count, calc_engagement_authenticity (requires X/Twitter API)
 ]
