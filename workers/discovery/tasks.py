@@ -222,13 +222,8 @@ def run_autonomous_investigation(self, case_id: str, project_id: str) -> dict:
             report.get("verdict"),
         )
 
-        # Dispatch LLM reasoning as follow-up (if API key is set)
-        if settings.anthropic_api_key:
-            celery_app.send_task(
-                "workers.reasoning.generate_verdict",
-                args=[case_id],
-                queue="reasoning",
-            )
+        # LLM reasoning is already handled inline by run_investigation().
+        # No follow-up dispatch needed — prevents duplicate reports.
 
         return {
             "status": "ok",

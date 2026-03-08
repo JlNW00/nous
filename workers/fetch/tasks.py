@@ -26,14 +26,6 @@ def _mark_job(db, job_id: str, status: str, error: str | None = None) -> None:
         db.flush()
 
 
-def _on_fetch_complete(case_id: str) -> None:
-    """Notify discovery worker to check if all fetches are done."""
-    celery_app.send_task(
-        "workers.discovery.check_collection_complete",
-        args=[case_id],
-        queue="discovery",
-    )
-
 
 @celery_app.task(name="workers.fetch.fetch_token_data", bind=True, max_retries=3)
 def fetch_token_data(self, case_id: str, job_id: str) -> dict:
@@ -65,8 +57,6 @@ def fetch_token_data(self, case_id: str, job_id: str) -> dict:
             _mark_job(db, job_id, JobStatus.FAILED.value, str(exc))
             db.commit()
         raise self.retry(exc=exc)
-    finally:
-        _on_fetch_complete(case_id)
 
     return {"status": "completed"}
 
@@ -86,8 +76,6 @@ def fetch_wallet_data(self, case_id: str, job_id: str) -> dict:
             _mark_job(db, job_id, JobStatus.FAILED.value, str(exc))
             db.commit()
         raise self.retry(exc=exc)
-    finally:
-        _on_fetch_complete(case_id)
     return {"status": "completed"}
 
 
@@ -106,8 +94,6 @@ def fetch_liquidity_data(self, case_id: str, job_id: str) -> dict:
             _mark_job(db, job_id, JobStatus.FAILED.value, str(exc))
             db.commit()
         raise self.retry(exc=exc)
-    finally:
-        _on_fetch_complete(case_id)
     return {"status": "completed"}
 
 
@@ -126,8 +112,6 @@ def fetch_code_data(self, case_id: str, job_id: str) -> dict:
             _mark_job(db, job_id, JobStatus.FAILED.value, str(exc))
             db.commit()
         raise self.retry(exc=exc)
-    finally:
-        _on_fetch_complete(case_id)
     return {"status": "completed"}
 
 
@@ -146,8 +130,6 @@ def fetch_social_data(self, case_id: str, job_id: str) -> dict:
             _mark_job(db, job_id, JobStatus.FAILED.value, str(exc))
             db.commit()
         raise self.retry(exc=exc)
-    finally:
-        _on_fetch_complete(case_id)
     return {"status": "completed"}
 
 
@@ -166,6 +148,4 @@ def fetch_infrastructure_data(self, case_id: str, job_id: str) -> dict:
             _mark_job(db, job_id, JobStatus.FAILED.value, str(exc))
             db.commit()
         raise self.retry(exc=exc)
-    finally:
-        _on_fetch_complete(case_id)
     return {"status": "completed"}

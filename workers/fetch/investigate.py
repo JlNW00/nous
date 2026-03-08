@@ -625,16 +625,30 @@ def _calculate_signals(
             db.add(sig)
             signals.append(sig)
 
-    # ── Deployer reputation (basic) ─────────────────────────────────
+    # ── Deployer reputation ──────────────────────────────────────────
     deployer = evidence.get("deployer_address")
     if deployer:
-        # For now: deployer identified = some confidence, unknown history = neutral
+        funding = evidence.get("funding_chain", [])
+        depth = len(funding)
+        # Score based on funding chain depth (proxy for obfuscation):
+        # Short chain = direct/traceable = better reputation
+        # Long/deep chain = layered obfuscation = worse reputation
+        if depth == 0:
+            rep_score, rep_conf = 0.4, 0.3   # no chain data = neutral lean negative
+        elif depth == 1:
+            rep_score, rep_conf = 0.7, 0.55  # one direct hop = clean
+        elif depth == 2:
+            rep_score, rep_conf = 0.55, 0.55 # two hops = slight concern
+        elif depth == 3:
+            rep_score, rep_conf = 0.35, 0.6  # 3 hops = obfuscated
+        else:
+            rep_score, rep_conf = 0.2, 0.6   # 4+ hops = deeply layered
         sig = Signal(
             case_id=case.case_id,
             signal_name=SignalName.DEPLOYER_REPUTATION.value,
-            signal_value=0.5,
+            signal_value=rep_score,
             score_component="wallet_entity_reputation",
-            confidence=0.3,
+            confidence=rep_conf,
         )
         db.add(sig)
         signals.append(sig)
