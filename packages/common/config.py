@@ -69,7 +69,7 @@ class Settings:
         default_factory=lambda: os.environ.get("ANTHROPIC_API_KEY", "")
     )
     llm_model: str = field(
-        default_factory=lambda: os.environ.get("LLM_MODEL", "claude-sonnet-4-20250514")
+        default_factory=lambda: os.environ.get("LLM_MODEL", "claude-sonnet-4-6")
     )
 
     # ── App ──────────────────────────────────────────────────────────────

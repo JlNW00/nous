@@ -44,11 +44,11 @@ celery_app.conf.update(
     # Routing — each worker type gets its own queue
     task_routes={
         "workers.discovery.*": {"queue": "discovery"},
-        "workers.fetch.*": {"queue": "fetch"},
         "workers.graph.*": {"queue": "graph"},
         "workers.signals.*": {"queue": "signals"},
         "workers.reasoning.*": {"queue": "reasoning"},
         "workers.reporting.*": {"queue": "reporting"},
+        "agents.poster.*": {"queue": "reporting"},
     },
 
     # Default queue for anything unmatched
@@ -62,9 +62,9 @@ celery_app.conf.update(
 # Auto-discover tasks from worker modules
 celery_app.autodiscover_tasks([
     "workers.discovery",
-    "workers.fetch",
     "workers.graph",
     "workers.signals",
     "workers.reasoning",
     "workers.reporting",
+    "agents.poster",
 ])

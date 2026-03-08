@@ -132,34 +132,58 @@ def calc_lp_locked(
 def calc_deployer_reputation(
     case_id: str, evidence_by_type: dict[str, list[RawEvidence]]
 ) -> dict[str, Any] | None:
-    """§10: Historical quality of deployer entity's launches. Higher is better."""
+    """§10: Historical quality of deployer entity's launches. Higher is better.
+
+    Uses funding chain depth as a proxy for obfuscation:
+    - Short chain (1 hop) = direct/traceable = better reputation
+    - Long chain (3+ hops) = layered obfuscation = worse reputation
+
+    Also queries Neo4j for related launches when available.
+    """
     on_chain = evidence_by_type.get("on_chain", [])
+    deployer = None
+    funding_depth = 0
+
     for ev in on_chain:
-        deployer = ev.payload_json.get("deployer_address")
-        if not deployer:
-            continue
+        d = ev.payload_json.get("deployer_address")
+        if d:
+            deployer = d
+        chain = ev.payload_json.get("funding_chain", [])
+        if chain:
+            funding_depth = max(funding_depth, len(chain))
 
+    if not deployer:
+        return None
+
+    # Try graph lookup for related launches
+    try:
         related = neo4j_client.find_related_launches(deployer)
-        total_launches = len(related)
-        if total_launches == 0:
-            return {
-                "signal_name": SignalName.DEPLOYER_REPUTATION.value,
-                "value": 0.5,  # Unknown — neutral
-                "score_component": "wallet_entity_reputation",
-                "confidence": 0.3,
-                "evidence_refs": [ev.evidence_id],
-            }
+        if related:
+            # More known launches without rug labels = slightly better
+            # TODO: Cross-reference with known rug/scam labels
+            funding_depth = max(funding_depth, 1)
+    except Exception:
+        pass  # Graph unavailable — fall through to depth-based scoring
 
-        # TODO: Cross-reference related launches with known rug/scam labels
-        # For now, more launches without known rugs = better reputation
-        return {
-            "signal_name": SignalName.DEPLOYER_REPUTATION.value,
-            "value": 0.5,  # Placeholder until rug database is populated
-            "score_component": "wallet_entity_reputation",
-            "confidence": 0.4,
-            "evidence_refs": [ev.evidence_id],
-        }
-    return None
+    # Score based on funding chain depth (proxy for obfuscation)
+    if funding_depth == 0:
+        rep_score, rep_conf = 0.4, 0.3   # no chain data = neutral lean negative
+    elif funding_depth == 1:
+        rep_score, rep_conf = 0.7, 0.55  # one direct hop = clean
+    elif funding_depth == 2:
+        rep_score, rep_conf = 0.55, 0.55 # two hops = slight concern
+    elif funding_depth == 3:
+        rep_score, rep_conf = 0.35, 0.6  # 3 hops = obfuscated
+    else:
+        rep_score, rep_conf = 0.2, 0.6   # 4+ hops = deeply layered
+
+    return {
+        "signal_name": SignalName.DEPLOYER_REPUTATION.value,
+        "value": rep_score,
+        "score_component": "wallet_entity_reputation",
+        "confidence": rep_conf,
+        "evidence_refs": [on_chain[0].evidence_id] if on_chain else [],
+    }
 
 
 def calc_capital_origin_score(
@@ -330,7 +354,55 @@ def calc_backend_presence(
     return None
 
 
+def calc_narrative_consistency(
+    case_id: str, evidence_by_type: dict[str, list[RawEvidence]]
+) -> dict[str, Any] | None:
+    """§10: Cross-signal consistency — multi-dimensional presence check."""
+    has_socials = False
+    has_websites = False
+    has_github = False
+    has_infra = False
+
+    for ev in evidence_by_type.get("market", []):
+        if ev.payload_json.get("socials"):
+            has_socials = True
+        if ev.payload_json.get("websites"):
+            has_websites = True
+
+    for ev in evidence_by_type.get("code", []):
+        if ev.payload_json.get("exists") or ev.payload_json.get("repo"):
+            has_github = True
+
+    for ev in evidence_by_type.get("infrastructure", []):
+        best = ev.payload_json.get("best_probe", {})
+        if best.get("dns_resolves"):
+            has_infra = True
+
+    presence_count = sum([has_socials, has_websites, has_github, has_infra])
+
+    if presence_count >= 4:
+        score, conf = 0.8, 0.65
+    elif presence_count >= 3:
+        score, conf = 0.7, 0.6
+    elif presence_count >= 2:
+        score, conf = 0.55, 0.55
+    elif presence_count == 1:
+        score, conf = 0.35, 0.5
+    else:
+        score, conf = 0.15, 0.5
+
+    return {
+        "signal_name": SignalName.NARRATIVE_CONSISTENCY.value,
+        "value": score,
+        "score_component": "cross_signal_consistency",
+        "confidence": conf,
+        "evidence_refs": [],
+    }
+
+
 # Registry of all calculators
+# NOTE: The primary signal path is investigate.py._calculate_signals() (sync pipeline).
+# This registry is used by the Celery task path as a secondary/async fallback.
 SIGNAL_CALCULATORS = [
     calc_top_holder_pct,
     calc_lp_locked,
@@ -340,5 +412,6 @@ SIGNAL_CALCULATORS = [
     calc_commit_velocity,
     calc_account_age_days,
     calc_backend_presence,
-    # TODO: calc_related_rug_count, calc_engagement_authenticity, calc_narrative_consistency
+    calc_narrative_consistency,
+    # TODO: calc_related_rug_count, calc_engagement_authenticity (requires X/Twitter API)
 ]

@@ -685,16 +685,35 @@ def _calculate_signals(
         db.add(sig)
         signals.append(sig)
 
-    # ── Narrative consistency (basic: do they have socials?) ────────
+    # ── Narrative consistency (multi-dimensional presence check) ────
     market_socials = market.get("socials", [])
     market_websites = market.get("websites", [])
-    has_presence = len(market_socials) > 0 or len(market_websites) > 0
+    has_socials = len(market_socials) > 0
+    has_websites = len(market_websites) > 0
+    has_github = evidence.get("github_repo", {}).get("exists", False)
+    has_infra = bool((evidence.get("infrastructure") or {}).get("best_probe", {}).get("dns_resolves"))
+    has_bags = evidence.get("bags", {}).get("bags_launched", False)
+
+    # Count how many presence dimensions are satisfied
+    presence_count = sum([has_socials, has_websites, has_github, has_infra, has_bags])
+
+    if presence_count >= 4:
+        nc_score, nc_conf = 0.8, 0.65  # strong multi-source narrative
+    elif presence_count >= 3:
+        nc_score, nc_conf = 0.7, 0.6   # solid presence across sources
+    elif presence_count >= 2:
+        nc_score, nc_conf = 0.55, 0.55 # moderate presence
+    elif presence_count == 1:
+        nc_score, nc_conf = 0.35, 0.5  # minimal — single source only
+    else:
+        nc_score, nc_conf = 0.15, 0.5  # no verifiable presence at all
+
     sig = Signal(
         case_id=case.case_id,
         signal_name=SignalName.NARRATIVE_CONSISTENCY.value,
-        signal_value=0.6 if has_presence else 0.2,
+        signal_value=nc_score,
         score_component="cross_signal_consistency",
-        confidence=0.4,
+        confidence=nc_conf,
     )
     db.add(sig)
     signals.append(sig)
@@ -800,6 +819,139 @@ def _format_infra_for_report(infra: dict[str, Any] | None) -> dict[str, Any] | N
     }
 
 
+def _run_ollama_reasoning(
+    case: Case,
+    project: Project,
+    signals: list[Signal],
+    evidence: dict[str, Any],
+) -> dict[str, Any] | None:
+    """
+    Call local Ollama instance for free LLM reasoning.
+    Requires: ollama run llama3:8b (or mistral)
+    Falls back gracefully if Ollama not available.
+    """
+    import httpx
+
+    try:
+        # Build structured inputs (same as Anthropic)
+        project_json = json.dumps({
+            "name": project.canonical_name,
+            "symbol": project.symbol,
+            "chain": project.chain,
+            "primary_contract": project.primary_contract,
+        }, indent=2)
+
+        signals_json = json.dumps([
+            {
+                "name": s.signal_name,
+                "value": s.signal_value,
+                "confidence": s.confidence,
+                "component": s.score_component,
+            }
+            for s in signals
+        ], indent=2)
+
+        evidence_parts: list[str] = []
+        for key, val in evidence.items():
+            if key.startswith("_"):
+                continue
+            if isinstance(val, dict):
+                evidence_parts.append(f"- {key}: keys={list(val.keys())[:8]}")
+            elif isinstance(val, list):
+                evidence_parts.append(f"- {key}: {len(val)} items")
+            elif val is not None:
+                evidence_parts.append(f"- {key}: {str(val)[:100]}")
+        evidence_summary = "\n".join(evidence_parts) or "No evidence collected."
+
+        system_prompt = (
+            "You are a crypto project investigation assistant. You analyze structured "
+            "evidence to assess project credibility.\n\n"
+            "Rules:\n"
+            "- Base your analysis ONLY on the evidence provided. Never invent or assume facts.\n"
+            "- If data is missing, explicitly note it as missing — do not speculate.\n"
+            "- You are not a market predictor. You assess whether a project's public narrative "
+            "matches its on-chain, code, and infrastructure evidence.\n"
+            "- Flag contradictions between public claims and evidence.\n"
+            "- Be specific: cite signal names and values when supporting findings.\n\n"
+            "Respond ONLY with a JSON object containing these fields:\n"
+            '{\n  "summary": "One paragraph executive summary",\n'
+            '  "supporting_findings": ["Finding 1", ...],\n'
+            '  "contradictions": ["Contradiction 1", ...],\n'
+            '  "open_questions": ["Question 1", ...],\n'
+            '  "verdict_suggestion": "legitimate | suspicious | high_risk | larp",\n'
+            '  "confidence": 0.0 to 1.0\n}'
+        )
+
+        user_msg = (
+            f"Investigate this project:\n\n"
+            f"## Project\n{project_json}\n\n"
+            f"## Signals\n{signals_json}\n\n"
+            f"## Evidence Summary\n{evidence_summary}\n\n"
+            f"Analyze the evidence and produce your investigation findings as JSON."
+        )
+
+        # Call local Ollama endpoint (try models in order of speed)
+        with httpx.Client(timeout=60) as client:
+            logger.info("Calling local Ollama for reasoning on case %s...", case.case_id)
+
+            # Get available models
+            try:
+                models_resp = client.get("http://localhost:11434/api/tags")
+                available_models = [m.get("name") for m in models_resp.json().get("models", [])]
+            except Exception:
+                available_models = []
+
+            # Try preferred models in order
+            preferred_models = ["mistral", "llama3:8b", "neural-chat"]
+            model_to_use = None
+            for preferred in preferred_models:
+                if preferred in available_models:
+                    model_to_use = preferred
+                    break
+
+            if not model_to_use:
+                if available_models:
+                    model_to_use = available_models[0]
+                else:
+                    return None  # No models available yet
+
+            logger.info("Using Ollama model: %s", model_to_use)
+
+            response = client.post(
+                "http://localhost:11434/api/generate",
+                json={
+                    "model": model_to_use,
+                    "prompt": f"{system_prompt}\n\n{user_msg}",
+                    "stream": False,
+                },
+            )
+            response.raise_for_status()
+
+        result_data = response.json()
+        raw_text = result_data.get("response", "").strip()
+
+        if not raw_text:
+            return None
+
+        # Extract JSON (handle markdown code blocks)
+        if "```" in raw_text:
+            raw_text = raw_text.split("```")[1]
+            if raw_text.startswith("json"):
+                raw_text = raw_text[4:]
+            raw_text = raw_text.strip()
+
+        parsed = json.loads(raw_text)
+        logger.info("Local Ollama reasoning complete for case %s", case.case_id)
+        return parsed
+
+    except httpx.ConnectError:
+        logger.debug("Ollama not available at localhost:11434 — will try Anthropic")
+        return None
+    except Exception as exc:
+        logger.debug("Local Ollama reasoning failed: %s — will try Anthropic", exc)
+        return None
+
+
 def _run_llm_reasoning(
     case: Case,
     project: Project,
@@ -808,12 +960,19 @@ def _run_llm_reasoning(
 ) -> dict[str, Any] | None:
     """
     Call the LLM reasoning layer (§14) on structured evidence.
+    Tries local Ollama first (free), falls back to Anthropic API.
     Returns ReasoningOutput dict or None if unavailable/failed.
     """
+    # Try local Ollama first (free, no API key needed)
+    result = _run_ollama_reasoning(case, project, signals, evidence)
+    if result is not None:
+        return result
+
+    # Fall back to Anthropic if Ollama not available
     from packages.common.config import settings as _s
 
     if not _s.anthropic_api_key:
-        logger.info("No ANTHROPIC_API_KEY — skipping LLM reasoning")
+        logger.info("No ANTHROPIC_API_KEY and Ollama unavailable — skipping LLM reasoning")
         return None
 
     try:

@@ -225,6 +225,16 @@ def run_autonomous_investigation(self, case_id: str, project_id: str) -> dict:
         # LLM reasoning is already handled inline by run_investigation().
         # No follow-up dispatch needed — prevents duplicate reports.
 
+        # Dispatch poster agent to auto-post verdict (if confidence threshold met)
+        try:
+            celery_app.send_task(
+                "agents.poster.post_verdict",
+                args=[case_id],
+                queue="reporting",
+            )
+        except Exception as post_exc:
+            logger.warning("Failed to dispatch poster agent: %s", post_exc)
+
         return {
             "status": "ok",
             "case_id": case_id,
