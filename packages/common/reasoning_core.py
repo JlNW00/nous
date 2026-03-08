@@ -150,11 +150,15 @@ def _call_ollama(
                 return None
 
             # Try preferred models in order of speed/quality
-            preferred_models = ["mistral", "llama3:8b", "neural-chat"]
+            # Use substring matching since Ollama reports "mistral:latest", "llama3.1:8b", etc.
+            preferred_keywords = ["mistral", "llama3.1:8b", "llama3:8b", "llama3.1:70b", "neural-chat"]
             model_to_use = None
-            for preferred in preferred_models:
-                if preferred in available_models:
-                    model_to_use = preferred
+            for keyword in preferred_keywords:
+                for available in available_models:
+                    if keyword in available:
+                        model_to_use = available
+                        break
+                if model_to_use:
                     break
 
             if not model_to_use:
