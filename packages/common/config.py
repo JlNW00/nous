@@ -57,6 +57,21 @@ class Settings:
     x_bearer_token: str = field(
         default_factory=lambda: os.environ.get("X_BEARER_TOKEN", "")
     )
+    x_api_key: str = field(
+        default_factory=lambda: os.environ.get("X_API_KEY", "")
+    )
+    x_api_secret: str = field(
+        default_factory=lambda: os.environ.get("X_API_SECRET", "")
+    )
+    x_access_token: str = field(
+        default_factory=lambda: os.environ.get("X_ACCESS_TOKEN", "")
+    )
+    x_access_token_secret: str = field(
+        default_factory=lambda: os.environ.get("X_ACCESS_TOKEN_SECRET", "")
+    )
+    x_agent_username: str = field(
+        default_factory=lambda: os.environ.get("X_AGENT_USERNAME", "")
+    )
     bags_api_key: str = field(
         default_factory=lambda: os.environ.get("BAGS_API_KEY", "")
     )

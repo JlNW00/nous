@@ -1,0 +1,1054 @@
+Autonomous Crypto Project
+ Investigation Agent
+Full Technical Specification — v2.0 (Bags Hackathon Edition)
+Purpose
+Architecture, data model, APIs, graph design, scoring, agent workflows,
+Bags integration, revenue model, deployment
+Prepared for
+Raj Patel
+Scope
+Solo-builder technical plan for an autonomous AI agent that continuously
+discovers, investigates, and verdicts crypto projects on Solana
+Date
+March 2026
+Version
+v2.0 — Updated for Bags $4M Hackathon (AI Agents + Bags API +
+Claude Skills tracks)
+Hackathon Tracks
+AI Agents
+Bags API
+Claude Skills
+
+
+1. Executive Summary
+This system is an autonomous on-chain intelligence agent — not a tool, not a dashboard, not a trading bot. It
+continuously monitors Solana token launches, investigates them without human input, scores them using
+deterministic signals plus LLM reasoning, and publishes public verdicts.
+The original spec described this capability. This version reorders build priorities and adds Bags-native
+integrations to qualify for and win the Bags $4M Hackathon.
+What Makes This an Agent (Not a Tool)
+ Reactive tools wait for input. This agent monitors, decides, acts, and posts autonomously.
+ The discovery layer continuously polls Bags API for new launches and Helius for mint events.
+ The agent has its own onchain wallet that receives partner fee shares.
+ Verdicts are published publicly via dashboard feed and X/Twitter without human intervention.
+ The agent re-investigates tokens on price spikes and volume anomalies.
+Core Output
+A credibility report with evidence, weighted scoring, confidence levels, and a verdict: Legitimate / Suspicious /
+High Risk / Larp. Reports are versioned, auditable, and traceable to stored evidence.
+Long-Term Moat
+Entity resolution and capital lineage graphs. The same operators launch multiple projects from fresh wallets.
+This system clusters actors, not just tokens — making it uniquely resistant to evasion over time.
+
+
+2. Product Thesis
+Most crypto scanners analyze isolated tokens. That is weak because the same operators launch multiple
+projects from fresh wallets. The stronger approach is actor-centric analysis.
+Core Questions the System Answers
+ Who likely controls this project?
+ Has this capital appeared in prior launches?
+ Does the technical footprint support the public narrative?
+ Are social signals organic or coordinated?
+ Was this token launched on Bags, and does its onchain performance support its story?
+Why Bags Is the Right Partner
+ Bags is the leading Solana token launchpad — our investigation pipeline directly serves their ecosystem.
+ Legitimate projects investigated by us route to Bags via embedded CTAs, driving verified trading volume.
+ Our partner key earns 25% of fees from tokens traded via our referrals — fully onchain and auditable.
+ The agent's autonomous operation aligns with Bags' thesis: builders who ship, not presenters who pitch.
+
+
+3. Current Implementation State
+The following components are built and functional as of March 2026:
+Component
+Status
+Notes
+FastAPI backend
+■ Live
+All endpoints functional
+Helius adapter
+■ Live
+Token metadata, holders, deployer, funding trace
+DexScreener adapter
+■ Live
+Pairs, liquidity, volume, market summary
+GitHub adapter
+■ Live
+repo_age_days, commit_velocity signals
+Infrastructure adapter
+■ Live
+DNS + HTTP probes, backend_presence signal
+Neo4j graph population
+■ Live
+Wired into sync pipeline
+Scoring framework
+■ Live
+7 categories, verdict bands, 0–100 score
+Report generation
+■ Live
+Versioned, stored in Postgres
+LLM reasoning layer
+■■ Built
+Anthropic SDK wired, not called from pipeline
+Celery discovery worker
+■■ Reserved
+Architecture ready, not triggered
+Next.js dashboard
+■■ Scaffold
+Search + layout + header done
+Bags API adapter
+■ Missing
+Hard blocker for hackathon eligibility
+Partner key
+■ Missing
+Onchain revenue not yet active
+Public deployment
+■ Missing
+No live URL yet
+X/Twitter poster
+■ Missing
+Autonomous posting not built
+
+
+4. System Architecture
+The full system is split into independent services. This keeps the project buildable by one person while
+preserving a path to future scale.
+Layer
+Responsibility
+Key Inputs
+Key Outputs
+Discovery Service
+Monitor Bags + Helius
+for new launches,
+enqueue cases
+Bags API, Helius
+webhooks, social mentions
+Case queue with priority
+scores
+Data Collection
+Service
+Pull raw evidence from
+all providers
+Addresses, names,
+domains, handles
+Normalized evidence
+payloads
+Entity Graph Engine
+Map relationships and
+cluster actors
+Wallet transfers, deployers,
+shared infra
+Neo4j entity graph
+Investigation Engine
+Aggregate signals, build
+timeline
+Case ID + evidence
+Signal set + chronological
+timeline
+Reasoning & Scoring
+LLM verdict +
+deterministic score
+Signals + graph context
+Report JSON + score +
+narrative
+Delivery Layer
+API, dashboard, public
+feed, poster agent
+Report objects
+Dashboard views,
+endpoints, X posts
+Canonical Pipeline
+Discover → Enrich → Graph → Signals → Reason → Score → Report → Publish
+Agent vs Tool Distinction
+The pipeline above runs autonomously. The discovery layer triggers investigation without human input. The
+delivery layer publishes results without human approval (subject to confidence thresholds). This is what makes
+the system an agent.
+
+
+5. Major Services
+5.1 Discovery Service (Celery discover_worker — NEW PRIORITY)
+Previously reserved. Now the first build priority because it is what makes the system autonomous rather than
+reactive.
+ Polls Bags API every 5 minutes for new token launches.
+ Listens to Helius webhooks for new mint events on Solana mainnet.
+ Monitors trending token feeds and social mentions as secondary sources.
+ Creates a Case record and enqueues enrichment jobs automatically.
+ Deduplicates by contract address, symbol, project name, domain, and known aliases.
+ Assigns investigation priority using: volume velocity, Bags-launched flag, social spike detection.
+5.2 Data Collection Service
+Separates provider adapters from normalization logic. Stores all raw provider responses for auditability.
+ Helius: token metadata, top holders, deployer identification, recursive funding trace.
+ DexScreener: pairs, liquidity, volume, price, market creation time.
+ GitHub: repo age, commit velocity, contributor count, fork count.
+ Infrastructure: DNS records, WHOIS, SSL cert, HTTP probe for backend presence.
+ Bags API (NEW): token launch data, lifetime fees, trading volume, partner stats, fee share config.
+ Caches expensive calls (holder lists, funding traces) with TTLs per object type.
+5.3 Entity Graph Engine
+The system's primary moat. Shifts analysis from token-level metrics to actor-level relationships.
+ Nodes: Wallet, Token, Contract, Entity, Exchange, Bridge, Domain, Repo, SocialAccount, Project.
+ Edges: DEPLOYED, FUNDED_BY, TRANSFERRED_TO, CONTROLS, PROVIDES_LIQUIDITY_FOR,
+LINKS_TO, MENTIONS.
+ Clusters wallets into operator entities using shared funding, gas payer patterns, bridge routes, deployment
+signatures.
+ Supports traversal queries: capital origin paths, related launches, deployer families, shared infrastructure.
+5.4 Investigation Engine
+ Converts raw evidence into structured signals with confidence scores and evidence pointers.
+ Builds a chronological timeline: funding → deployment → listing → social creation → code events.
+ Produces a single structured investigation payload for the reasoning layer.
+5.5 Reasoning & Scoring Layer
+ Deterministic heuristics run first. LLM reasoning runs on top of structured evidence — never raw text dumps.
+ Anthropic SDK (already integrated): receives structured JSON facts, returns verdict narrative.
+
+
+ Required output fields: summary, supporting_findings, contradictions, open_questions, verdict_suggestion,
+confidence.
+ LLM cannot invent missing evidence. Missing data stays explicitly missing in output.
+ Every prompt and response version stored and tied to the report for auditability.
+ Fallback to deterministic-only mode if LLM unavailable.
+5.6 Delivery Layer
+ REST API: all endpoints live and functional.
+ Dashboard: Next.js — search, report view, score breakdown, graph panel, live agent feed.
+ Public feed: auto-investigated tokens appear in real-time as agent processes them.
+ X/Twitter poster: agent auto-posts verdict summaries with confidence thresholds as safety gate.
+ Historical versions: score drift and case evolution tracked over time.
+
+
+6. Bags Integration (NEW)
+Bags integration is the hard eligibility requirement for the hackathon and the foundation of the revenue model.
+Three integration points are required.
+6.1 Bags API Adapter (workers/fetch/adapters/bags.py)
+ Base URL: https://public-api-v2.bags.fm/api/v1
+ Auth: x-api-key header. Key from dev.bags.fm. Rate limit: 1,000 req/hour.
+ Detect Bags-launched tokens by checking for signer BAGSB9TpGrZxQbEsrEznv5jXXdwyP6AXerN8aVRiAmcv in
+Helius tx history.
+ Pull: token lifetime fees, trading volume, creator earnings, top holders from Bags API.
+ Pull: fee share config — who receives fees, what percentage, which program version.
+ Adds three new signals: bags_launched (bool), bags_lifetime_fees (SOL), bags_trading_volume (USD).
+ Bags-launched tokens receive a scoring bonus in the Token Structure category.
+6.2 Partner Key (Revenue — Onchain)
+ Register at dev.bags.fm → create Partner Key → store wallet address in config.
+ Default: partner key receives 25% of fees from tokens launched via that partner key.
+ Embed partner config key in all 'Trade on Bags' CTAs surfaced in Legitimate verdict reports.
+ Agent wallet accumulates SOL fee shares autonomously — verifiable onchain by judges.
+ Surface partner stats in dashboard via GET /api/v1/partner/stats.
+6.3 Platform Token — $SCOUT (Optional, High Impact)
+ Launch $SCOUT on Bags as the platform utility token.
+ Earn 1% of all $SCOUT trading volume forever.
+ Premium investigation gate: full report requires $SCOUT holding or SOL payment.
+ Dividend distribution: top 100 holders receive proportional payouts every 24h automatically.
+ Creates onchain revenue + trading volume visible to Bags judges immediately.
+6.4 Revenue Loop Summary
+Stream
+Mechanism
+Onchain?
+Timeline
+Partner Key
+25% of fees from tokens traded via our referral
+CTAs
+Yes
+Week 1
+$SCOUT token
+1% of all $SCOUT trading volume
+Yes
+Week 2
+Premium gate
+SOL payment per investigation or $SCOUT
+holding
+Yes
+Week 3+
+
+
+7. Data Sources & Provider Adapters
+Domain
+Provider
+What Is Pulled
+Status
+On-chain
+Helius
+Holders, transfers, deployers, LPs, tx history,
+mint events
+■ Live
+Market/DEX
+DexScreener
+Pairs, volume, liquidity, creation time
+■ Live
+Code
+GitHub API
+Repo creation, commits, contributors, forks
+■ Live
+Infrastructure
+DNS/HTTP
+Domain age, hosts, backend endpoints, uptime
+■ Live
+Bags
+Bags API
+Token launch data, fees, volume, partner stats
+■ Build next
+Social
+X API
+Account age, posting cadence, engagement
+■ Planned
+Manual
+Analyst input
+Labels, evidence, exceptions with provenance
+■ Live
+
+
+8. Canonical Data Model
+PostgreSQL for relational entities. Neo4j for graph relationships. Raw provider payloads stored separately so all
+calculations remain auditable.
+8.1 PostgreSQL Core Tables (17 tables — no changes)
+projects, project_aliases, cases, wallets, contracts, domains, repos,
+social_accounts, raw_evidence, signals, reports, entity_clusters,
+project_links, provider_cache, jobs, analyst_annotations, score_history
+8.2 New Signals Added
+Signal
+Source
+Category
+Direction
+bags_launched
+Bags API / Helius tx
+Token Structure
+True = positive
+bags_lifetime_fees
+Bags API
+Token Structure
+Higher = more active
+bags_trading_volume
+Bags API
+Token Structure
+Higher = more active
+related_rug_count
+Neo4j graph traversal
+Wallet Reputation
+Higher = worse
+8.3 Neo4j Graph Model
+Unchanged from v1. Nodes: Wallet, Token, Contract, Entity, Exchange, Bridge, Domain, Repo, SocialAccount,
+Project. Edges: DEPLOYED, FUNDED_BY, TRANSFERRED_TO, CONTROLS, PROVIDES_LIQUIDITY_FOR,
+LINKS_TO, MENTIONS.
+Entity Resolution Heuristics
+ Shared funding source within a short time window.
+ Repeated liquidity provisioning from the same wallet set.
+ Gas payer / sponsorship patterns — one wallet enabling many others.
+ Bridge patterns: same source chain, route, timing.
+ Repeated deployment signatures: compiler metadata, contract templates, factory usage.
+ Shared off-chain artifacts: domain registrant, GitHub ownership, social account linkage.
+ Behavioral similarity: timing, wallet choreography, listing cadence across launches.
+
+
+9. Signal Library
+Signals are deterministic where possible. Each signal stores value, confidence, and evidence pointers.
+Signal
+Category
+Direction
+Weight
+Status
+top_holder_pct
+Token
+Higher = worse
+Medium-High
+■ Live
+lp_locked
+Token
+Higher = better
+Medium
+■ Live
+bags_launched
+Token
+True = better
+Medium
+■ Build
+bags_lifetime_fees
+Token
+Higher = better
+Medium
+■ Build
+bags_trading_volume
+Token
+Higher = better
+Medium
+■ Build
+deployer_reputation
+Wallet
+Higher = better
+High
+■■ Placeholder
+0.5
+capital_origin_score
+Wallet
+Higher = better
+High
+■ Live
+related_rug_count
+Wallet
+Higher = worse
+High
+■ Build (Neo4j)
+repo_age_days
+Code
+Older = better
+Medium
+■ Live
+commit_velocity
+Code
+Higher = better
+Medium
+■ Live
+account_age_days
+Social
+Older = better
+Low-Med
+■ Planned
+engagement_authentici
+ty
+Social
+Higher = better
+Medium
+■ Planned
+backend_presence
+Infrastructure
+Higher = better
+Medium
+■ Live
+narrative_consistency
+Cross-domain
+Higher = better
+High
+■ Basic
+
+
+10. Scoring Framework
+Bounded sub-scores ensure explainability. No single opaque model.
+Category
+Max Points
+Key Signals
+Wallet / Entity Reputation
+30
+deployer_reputation, capital_origin_score,
+related_rug_count
+Token Structure & Liquidity
+20
+top_holder_pct, lp_locked, bags_launched,
+bags_lifetime_fees
+Developer & Code Authenticity
+15
+repo_age_days, commit_velocity
+Infrastructure Reality
+10
+backend_presence
+Social Authenticity
+10
+account_age_days, engagement_authenticity
+Capital Lineage Quality
+10
+capital_origin_score, funding trace depth
+Cross-Signal Consistency
+5
+narrative_consistency
+TOTAL
+100
+Verdict Bands
+Score
+Verdict
+Interpretation
+80–100
+■ Legitimate
+Evidence broadly supports the public story
+60–79
+■ Suspicious
+Mixed evidence; notable concerns present
+35–59
+■ High Risk
+Strong warning signals and unresolved contradictions
+0–34
+■ Larp / Likely Scam
+Structure and evidence materially fail credibility checks
+
+
+11. Autonomous Agent Workflow
+The key architectural change from v1: the pipeline is triggered autonomously by the discovery layer, not by
+human input.
+11.1 Autonomous Discovery Loop
+Every 5 min: Poll Bags API for new launches
+→ Filter: volume velocity > threshold OR Bags-launched
+→ Deduplicate by contract/symbol/domain
+→ Create Case record
+→ Enqueue: fetch_worker, graph_worker, signal_worker
+Real-time: Helius webhook → new mint event
+→ Same pipeline as above, higher priority
+11.2 Re-Investigation Triggers
+ Price spike > 50% in 1 hour → re-investigate at higher confidence threshold.
+ Volume anomaly: 10x average volume → re-investigate.
+ Manual analyst submission via POST /cases/analyze.
+ Scheduled: all active cases re-investigated every 24 hours.
+11.3 Full Investigation Pipeline
+Step
+Worker
+Input
+Output
+Failure Mode
+1. Disco
+ver
+discover_worker
+Bags API / Helius
+events
+Case + fetch jobs
+Retry with backoff, dedupe
+by key
+2. Fetch
+fetch_worker
+Collection jobs
+Raw evidence
+payloads
+Cache failures, partial
+success allowed
+3.
+Graph
+graph_worker
+Wallet/contract/dom
+ain evidence
+Neo4j nodes +
+edges
+Idempotent upserts
+4.
+Signals
+signal_worker
+Evidence + graph
+context
+Signal rows
+Mark low confidence if
+incomplete
+5.
+Reason
+reason_worker
+Investigation
+payload (structured)
+Draft verdict +
+narrative
+Fallback to deterministic-only
+6.
+Report
+report_worker
+Scores + verdict
+Versioned report
+Always preserve prior
+version
+7.
+Publish
+poster_agent
+Report (if
+confidence ≥
+threshold)
+Dashboard feed + X
+post
+Skip post if confidence <
+gate
+
+
+12. LLM Reasoning Specification
+The LLM operates on structured evidence, not raw scraped text. This is critical for auditability and preventing
+hallucination.
+Input Contract
+ Structured JSON facts only — no uncontrolled raw dumps.
+ Prompt frames the model as an investigation assistant, not a market predictor.
+ All missing data explicitly marked as MISSING — model cannot invent evidence.
+Required Output Fields
+Field
+Type
+Description
+summary
+string
+One-paragraph executive summary of findings
+supporting_findings
+array
+Top 5–8 signals that support the verdict
+contradictions
+array
+Claims that do not match evidence
+open_questions
+array
+What could not be verified
+verdict_suggestion
+enum
+Legitimate / Suspicious / High Risk / Larp
+confidence
+float 0–1
+Model confidence in verdict
+Auditability Requirements
+ Every model prompt and response stored and versioned, tied to report_id.
+ Deterministic post-processing maps model output into report objects — no free-form injection.
+ Model output is advisory. Deterministic score is primary. LLM adjusts narrative, not final score band.
+
+
+13. API Specification
+Method
+Endpoint
+Purpose
+Status
+POST
+/investigate
+Run full sync investigation pipeline
+■ Live
+POST
+/cases/analyze
+Create or refresh a case from input
+identifiers
+■ Live
+GET
+/cases/{case_id}
+Read current case status
+■ Live
+GET
+/reports/{id}/latest
+Fetch latest versioned report
+■ Live
+GET
+/projects/search?q=
+Search known projects and aliases
+■ Live
+GET
+/entities/{entity_id}
+View entity cluster profile
+■ Live
+GET
+/projects/{id}/timeline
+Read chronological case timeline
+■ Live
+POST
+/labels/manual
+Attach analyst labels/notes
+■ Live
+GET
+/feed
+Public live agent feed (NEW)
+■ Build
+GET
+/partner/stats
+Partner fee earnings from Bags (NEW)
+■ Build
+Example Investigate Request
+POST /investigate
+{ "chain": "solana", "token_address": "...", "project_name": "ExampleAI" }
+Example Report Payload Fields
+ report_id, case_id, version, generated_at
+ project: name, symbol, chain, contract, description, image
+ credibility_score (0–100), verdict, overall_confidence
+ score_breakdown[] — per category with evidence refs
+ signals[] — all signals with value, confidence, evidence pointers
+ market_data: price, mcap, liquidity, volume, pairs, dex, bags_fees, bags_volume
+ deployer: address, funding_chain[]
+ top_holders[], top_findings[], contradictions[], open_questions[], missing_data[]
+ bags_launched (bool), bags_partner_cta (url with partner key embedded)
+
+
+14. Dashboard Requirements
+Page / Component
+Priority
+Description
+Search bar
+■ Done
+Token, project, wallet, domain, handle
+Live agent feed
+■ High
+Real-time stream of auto-investigated tokens with verdict
+badges
+Report view
+■ High
+Score, verdict banner, top findings, contradictions
+Score breakdown
+■ High
+Per-category breakdown with evidence refs and
+confidence
+Signal table
+■ High
+All signals with values, confidence, evidence pointers
+Graph panel
+■ Medium
+Neo4j entity + capital lineage visualization
+Timeline panel
+■ Medium
+Chronological events: funding → deploy → listing
+Historical versions
+■ Medium
+Score drift and case evolution over time
+Partner earnings
+■ Medium
+Real-time partner fee balance from Bags
+'Trade on Bags' CTA
+■ Medium
+Embedded referral on Legitimate verdict reports
+
+
+15. Repository Layout
+Path
+Purpose
+Status
+apps/api/main.py
+FastAPI application + REST endpoints
+■ Live
+apps/dashboard/
+Next.js frontend
+■■ Scaffold
+workers/discovery/tasks.py
+Bags API polling + Helius webhook
+listener
+■ Wire now
+workers/fetch/investigate.py
+Sync pipeline orchestrator
+■ Live
+workers/fetch/adapters/helius.py
+Helius RPC adapter
+■ Live
+workers/fetch/adapters/dexscreener.py
+DexScreener adapter
+■ Live
+workers/fetch/adapters/github.py
+GitHub adapter
+■ Live
+workers/fetch/adapters/infra.py
+DNS/HTTP infrastructure adapter
+■ Live
+workers/fetch/adapters/bags.py
+Bags API adapter (NEW)
+■ Build
+workers/graph/tasks.py
+Neo4j upsert jobs
+■ Live
+workers/signals/tasks.py
+Deterministic signal calculators
+■ Live
+workers/reasoning/tasks.py
+Anthropic LLM orchestration
+■■ Wire to pipeline
+workers/reporting/tasks.py
+Report generation + versioning
+■ Live
+agents/poster/twitter.py
+Autonomous X/Twitter posting agent
+(NEW)
+■ Build
+packages/common/
+Shared models, enums, config,
+scoring, graph
+■ Live
+packages/prompts/
+Prompt templates + model configs
+■ Live
+infra/
+Docker Compose, deployment
+manifests
+■ Live
+docs/schema.sql
+Postgres schema — auto-applied on
+Neon
+■ Live
+
+
+16. Sprint Plan — Hackathon Build Order
+Ordered by what unlocks hackathon eligibility first, then what raises grant size.
+Sprint 1 — Bags Integration + Eligibility (Days 1–2)
+Task
+File
+Why
+Bags API adapter
+workers/fetch/adapters/bags.py
+Hard eligibility requirement
+bags_launched signal
+workers/signals/tasks.py
+Scoring + Bags story
+Register partner key
+dev.bags.fm (manual)
+Onchain revenue starts
+BAGS_API_KEY in .env
+packages/common/config.py
+Config + auth
+Sprint 2 — Autonomous Discovery Engine (Days 2–4)
+Task
+File
+Detail
+Wire discover_worker
+workers/discovery/tasks.py
+Poll Bags API every 5 min for new
+launches
+Helius webhook listener
+workers/discovery/tasks.py
+New mint events → auto-queue
+Priority scoring
+workers/discovery/tasks.py
+Volume velocity + bags_launched
+flag
+Auto-investigation trigger
+workers/fetch/investigate.py
+Discovery → Case → Pipeline, no
+human needed
+Sprint 3 — Wire LLM Reasoning (Day 3)
+Task
+File
+Detail
+Call reason_worker from
+pipeline
+workers/fetch/investigate.py
+After signals → Anthropic SDK →
+structured verdict
+Prompt per spec section 12
+packages/prompts/
+summary, findings, contradictions,
+open_questions
+Store prompt + response
+workers/reporting/tasks.py
+Tied to report_id for auditability
+Sprint 4 — Deploy + Go Live (Day 4)
+Task
+Target
+Detail
+
+
+Backend deployment
+Railway / Render
+FastAPI + Celery workers, env vars
+Frontend deployment
+Vercel
+Next.js dashboard
+Public URL
+Required for application
+Bags judges need to see live product
+Repo public
+GitHub
+GitHub stars = traction signal for judging
+Sprint 5 — Frontend Completion (Days 4–6)
+Component
+File
+Priority
+Report view page
+pages/report/[id].tsx
+■ Critical — judges need to see
+this
+Score breakdown
+components/ScoreBreakdown.tsx
+■ Critical
+Verdict banner
+components/VerdictBanner.tsx
+■ Critical
+Live agent feed
+pages/feed.tsx
+■ Critical — shows autonomous
+operation
+Signal table
+components/SignalTable.tsx
+■ High
+Graph panel
+components/GraphPanel.tsx
+■ High
+Timeline panel
+components/Timeline.tsx
+■ Medium
+Partner earnings
+components/PartnerStats.tsx
+■ Medium
+Trade on Bags CTA
+components/BagsCTA.tsx
+■ Medium
+Sprint 6 — Poster Agent + Revenue (Days 5–7)
+Task
+File
+Detail
+X/Twitter poster
+agents/poster/twitter.py
+Auto-post verdicts with confidence
+gate
+Confidence threshold
+agents/poster/twitter.py
+Only post if confidence ≥ 0.75
+Partner CTA in reports
+workers/reporting/tasks.py
+Embed partner key in Legitimate
+verdict reports
+$SCOUT token launch
+bags.fm UI
+Platform token — onchain
+revenue starts day 1
+
+
+17. Tech Stack
+Layer
+Technology
+Notes
+Backend API
+Python 3.12 + FastAPI
+Async + sync SQLAlchemy
+Workers
+Celery + Redis (Upstash)
+6 worker types, Bags-triggered discovery
+Relational DB
+PostgreSQL (Neon)
+17 tables, schema auto-applied
+Graph DB
+Neo4j (Aura Free)
+Entity resolution + capital lineage
+Queue/Cache
+Redis (Upstash)
+Job queue + provider response cache
+LLM
+Anthropic Claude (SDK)
+Structured reasoning, verdict narrative
+On-chain
+Helius (Solana RPC)
+Token data, holders, deployer, mint events
+Market data
+DexScreener
+No API key required
+Bags
+Bags API + Bags SDK
+Token data, fees, partner key, fee share
+Frontend
+Next.js + TypeScript + Tailwind
+Deployed on Vercel
+Infra
+Docker Compose (local) / Railway
+(prod)
+Cloud-ready from day 1
+
+
+18. Deployment Topology
+Component
+Runtime
+Persistence / Dependency
+API service
+Railway container
+Neon Postgres, Upstash Redis, Neo4j Aura
+Discovery worker
+Railway container
+Upstash Redis, Bags API, Helius webhooks
+Fetch workers
+Railway container
+Upstash Redis, provider APIs
+Graph worker
+Railway container
+Neo4j Aura
+Reason worker
+Railway container
+Anthropic API
+Poster agent
+Railway cron / container
+X API, report store
+Dashboard
+Vercel
+API service
+Raw evidence store
+Neon Postgres (blob)
+Provider payload archives
+
+
+19. Hackathon Application Checklist
+All items must be complete before applying at bags.fm/hackathon. Applications reviewed on rolling basis —
+apply early.
+#
+Item
+Track
+Status
+1
+Bags API adapter live + bags_launched signal in
+reports
+Bags API
+■
+2
+Partner key registered at dev.bags.fm
+Bags API / Revenue
+■
+3
+Discovery worker running autonomously (no human
+trigger)
+AI Agents
+■
+4
+LLM reasoning wired into pipeline (Anthropic SDK
+active)
+Claude Skills
+■
+5
+Public URL live — backend + frontend deployed
+All tracks
+■
+6
+Repo public with descriptive README
+Traction
+■
+7
+≥10 real investigations visible on public dashboard
+Traction
+■
+8
+$SCOUT token launched on Bags (optional, high
+impact)
+Revenue
+■
+9
+Partner fee earnings visible onchain
+Revenue
+■
+10
+Apply at bags.fm/hackathon
+—
+■
+Hackathon Tracks Covered
+Track
+How We Qualify
+AI Agents
+Autonomous discovery + investigation + public posting without human input.
+Solana-native, Celery-backed, continuous operation.
+Bags API
+Bags token data adapter, bags_launched scoring signal, partner key integration, fee
+share CTA in reports.
+Claude Skills
+Anthropic SDK wired for structured LLM reasoning. Every report contains AI-generated
+narrative verdict, findings, contradictions, and open questions.
+
+
+20. Security, Cost Controls & Risks
+Security
+ Sanitize and validate all external input identifiers before processing.
+ Rate-limit public endpoints. Auth required for expensive operations.
+ Separate provider secrets from app containers using environment secrets.
+ Poster agent has confidence threshold gate — no unverifiable allegations posted automatically.
+ All manual analyst overrides logged with provenance.
+Cost Controls
+ Cache provider results aggressively with TTLs based on object type.
+ Run cheap deterministic checks before expensive recursive traces.
+ LLM reasoning only invoked after deterministic enrichment is complete.
+ Historical snapshots avoid re-pulling identical evidence on reruns.
+ Batch social and chain requests where provider limits allow.
+ Bags API: 1,000 req/hour limit — implement exponential backoff.
+Key Risks
+Risk
+Mitigation
+False positives from aggressive
+wallet clustering
+Confidence thresholds, human review gate for public posts
+False negatives when providers
+lack data
+Graceful degradation, missing_data field in report, low confidence flag
+Model overconfidence
+Tightly constrained prompts, deterministic score is primary
+Reputation risk from premature
+posting
+Confidence ≥ 0.75 required, no posting below threshold
+Helius 404 on large tokens (USDC,
+etc)
+Known issue, non-critical, skip and log
+
+
+21. Success Criteria
+ The agent discovers and investigates new Bags token launches without human input.
+ Each report cites specific stored evidence for its main claims.
+ The graph identifies at least one meaningful relationship class beyond direct deployer history.
+ The dashboard displays score, timeline, graph context, and live agent feed.
+ Partner key is earning onchain fees from Bags trading volume.
+ The architecture remains operable and extensible by one developer.
+ The system qualifies for and is accepted into the Bags Hackathon.
+22. Final Design Principle
+Do not optimize for looking like a generic crypto dashboard. Optimize for evidence quality, actor-level
+relationships, and report explainability.
+The unique value of this system is not that it knows prices. It is that it can reconstruct who is behind a project,
+whether the story being told matches the underlying evidence — and do it autonomously, continuously, at scale.
+ Autonomous Crypto Investigation Agent — Technical Spec v2.0
+ Bags Hackathon Edition — March 2026
+
+

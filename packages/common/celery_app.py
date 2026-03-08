@@ -21,6 +21,10 @@ celery_app.conf.beat_schedule = {
         "task": "workers.discovery.reinvestigate_active_cases",
         "schedule": 86400.0,  # Every 24 hours
     },
+    "check-x-mentions": {
+        "task": "agents.poster.check_mentions",
+        "schedule": 300.0,  # Every 5 minutes — poll for @SCOUT mentions
+    },
 }
 
 celery_app.conf.update(
