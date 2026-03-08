@@ -3,9 +3,15 @@ __pycache__/
 *.egg-info/
 dist/
 build/
+
+# Secrets — catch all env variants except the example template
 .env
+.env.*
+!.env.example
+
 .venv/
 venv/
+
 *.db
 *.sqlite3
 node_modules/
@@ -13,3 +19,15 @@ node_modules/
 .turbo/
 *.log
 .DS_Store
+
+# IDE / tool sessions
+.claude/
+.idea/
+.vscode/
+
+# Key files that should never be committed
+*.pem
+*.key
+*.p12
+credentials.json
+service-account*.json
