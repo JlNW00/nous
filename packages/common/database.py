@@ -15,14 +15,22 @@ from packages.common.config import settings
 
 # ── Build URLs ──────────────────────────────────────────────────────────────
 
-# Async URL: used as-is from env (postgresql+asyncpg://...)
+# Async URL: asyncpg doesn't understand sslmode — convert to ssl param
 _async_url = settings.database_url
+if "sslmode=" in _async_url and "+asyncpg" in _async_url:
+    # asyncpg uses 'ssl' not 'sslmode'; strip sslmode and add connect_args instead
+    _async_url = _async_url.split("?")[0] if "?" in _async_url else _async_url
+    _async_ssl = True
+else:
+    _async_ssl = False
 
 # Sync URL: swap driver and keep everything else including query params
-_sync_url = _async_url.replace("+asyncpg", "+psycopg2")
+_sync_url = settings.database_url.replace("+asyncpg", "+psycopg2")
 
 
 # ── Async engine (for FastAPI) ──────────────────────────────────────────────
+
+_async_connect_args = {"ssl": "require"} if _async_ssl else {}
 
 async_engine = create_async_engine(
     _async_url,
@@ -30,6 +38,7 @@ async_engine = create_async_engine(
     pool_size=10,
     max_overflow=20,
     pool_pre_ping=True,
+    connect_args=_async_connect_args,
 )
 
 AsyncSessionLocal = async_sessionmaker(
