@@ -26,6 +26,10 @@ from packages.common.models import (
     Signal,
     Wallet,
 )
+from packages.common.reasoning_core import (
+    NOUS_SYSTEM_PROMPT,
+    call_reasoning_service,
+)
 from packages.common.scoring import SignalInput, compute_score
 
 logger = logging.getLogger(__name__)
@@ -902,146 +906,6 @@ def _format_infra_for_report(infra: dict[str, Any] | None) -> dict[str, Any] | N
     }
 
 
-def _run_ollama_reasoning(
-    case: Case,
-    project: Project,
-    signals: list[Signal],
-    evidence: dict[str, Any],
-) -> dict[str, Any] | None:
-    """
-    Call local Ollama instance for free LLM reasoning.
-    Requires: ollama run llama3:8b (or mistral)
-    Falls back gracefully if Ollama not available.
-    """
-    import httpx
-
-    try:
-        # Build structured inputs (same as Anthropic)
-        project_json = json.dumps({
-            "name": project.canonical_name,
-            "symbol": project.symbol,
-            "chain": project.chain,
-            "primary_contract": project.primary_contract,
-        }, indent=2)
-
-        signals_json = json.dumps([
-            {
-                "name": s.signal_name,
-                "value": s.signal_value,
-                "confidence": s.confidence,
-                "component": s.score_component,
-            }
-            for s in signals
-        ], indent=2)
-
-        evidence_parts: list[str] = []
-        for key, val in evidence.items():
-            if key.startswith("_"):
-                continue
-            if isinstance(val, dict):
-                evidence_parts.append(f"- {key}: keys={list(val.keys())[:8]}")
-            elif isinstance(val, list):
-                evidence_parts.append(f"- {key}: {len(val)} items")
-            elif val is not None:
-                evidence_parts.append(f"- {key}: {str(val)[:100]}")
-        evidence_summary = "\n".join(evidence_parts) or "No evidence collected."
-
-        system_prompt = (
-            "You are NOUS — an autonomous on-chain intelligence agent. You investigate crypto "
-            "projects with the cold precision of a forensic analyst and the directness of someone "
-            "who has seen every rug, every coordinated pump, every fake team.\n\n"
-            "Your voice: clinical, direct, zero tolerance for ambiguity. You don't hedge. "
-            "You call things what they are. When evidence is thin, you say so bluntly. "
-            "When a project looks like a coordinated extraction play, you name it.\n\n"
-            "Core rules:\n"
-            "- Base analysis ONLY on evidence provided. Never invent facts.\n"
-            "- Missing data = explicitly missing. Do not speculate to fill gaps.\n"
-            "- You assess whether the public narrative matches on-chain, code, and infra evidence.\n"
-            "- Flag contradictions with specificity — cite signal names and values.\n"
-            "- Write findings like someone who will be held accountable for them.\n"
-            "- Summaries should be punchy and quotable — CT-ready language, not corporate speak.\n\n"
-            "Respond ONLY with a JSON object:\n"
-            '{\n'
-            '  "summary": "2-3 sentence forensic verdict. Direct, specific, citable.",\n'
-            '  "supporting_findings": ["Specific finding with signal name and value", ...],\n'
-            '  "contradictions": ["Claim X vs evidence Y — direct contradiction", ...],\n'
-            '  "open_questions": ["What could not be verified and why it matters", ...],\n'
-            '  "verdict_suggestion": "legitimate | suspicious | high_risk | larp",\n'
-            '  "confidence": 0.0,\n'
-            '  "thread_hook": "One punchy opening line for a Twitter thread about this token"\n'
-            '}'
-        )
-
-        user_msg = (
-            f"Investigate this project:\n\n"
-            f"## Project\n{project_json}\n\n"
-            f"## Signals\n{signals_json}\n\n"
-            f"## Evidence Summary\n{evidence_summary}\n\n"
-            f"Produce your forensic investigation findings as JSON."
-        )
-
-        # Call local Ollama endpoint (try models in order of speed)
-        with httpx.Client(timeout=60) as client:
-            logger.info("Calling local Ollama for reasoning on case %s...", case.case_id)
-
-            # Get available models
-            try:
-                models_resp = client.get("http://localhost:11434/api/tags")
-                available_models = [m.get("name") for m in models_resp.json().get("models", [])]
-            except Exception:
-                available_models = []
-
-            # Try preferred models in order
-            preferred_models = ["mistral", "llama3:8b", "neural-chat"]
-            model_to_use = None
-            for preferred in preferred_models:
-                if preferred in available_models:
-                    model_to_use = preferred
-                    break
-
-            if not model_to_use:
-                if available_models:
-                    model_to_use = available_models[0]
-                else:
-                    return None  # No models available yet
-
-            logger.info("Using Ollama model: %s", model_to_use)
-
-            response = client.post(
-                "http://localhost:11434/api/generate",
-                json={
-                    "model": model_to_use,
-                    "prompt": f"{system_prompt}\n\n{user_msg}",
-                    "stream": False,
-                },
-            )
-            response.raise_for_status()
-
-        result_data = response.json()
-        raw_text = result_data.get("response", "").strip()
-
-        if not raw_text:
-            return None
-
-        # Extract JSON (handle markdown code blocks)
-        if "```" in raw_text:
-            raw_text = raw_text.split("```")[1]
-            if raw_text.startswith("json"):
-                raw_text = raw_text[4:]
-            raw_text = raw_text.strip()
-
-        parsed = json.loads(raw_text)
-        logger.info("Local Ollama reasoning complete for case %s", case.case_id)
-        return parsed
-
-    except httpx.ConnectError:
-        logger.debug("Ollama not available at localhost:11434 — will try Anthropic")
-        return None
-    except Exception as exc:
-        logger.debug("Local Ollama reasoning failed: %s — will try Anthropic", exc)
-        return None
-
-
 def _run_llm_reasoning(
     case: Case,
     project: Project,
@@ -1049,114 +913,55 @@ def _run_llm_reasoning(
     evidence: dict[str, Any],
 ) -> dict[str, Any] | None:
     """
-    Call the LLM reasoning layer (§14) on structured evidence.
+    Call the LLM reasoning layer on structured evidence.
     Tries local Ollama first (free), falls back to Anthropic API.
     Returns ReasoningOutput dict or None if unavailable/failed.
     """
-    # Try local Ollama first (free, no API key needed)
-    result = _run_ollama_reasoning(case, project, signals, evidence)
-    if result is not None:
-        return result
+    # Build structured inputs
+    project_json = json.dumps({
+        "name": project.canonical_name,
+        "symbol": project.symbol,
+        "chain": project.chain,
+        "primary_contract": project.primary_contract,
+    }, indent=2)
 
-    # Fall back to Anthropic if Ollama not available
-    from packages.common.config import settings as _s
+    signals_json = json.dumps([
+        {
+            "name": s.signal_name,
+            "value": s.signal_value,
+            "confidence": s.confidence,
+            "component": s.score_component,
+        }
+        for s in signals
+    ], indent=2)
 
-    if not _s.anthropic_api_key:
-        logger.info("No ANTHROPIC_API_KEY and Ollama unavailable — skipping LLM reasoning")
-        return None
+    # Build evidence summary (not raw dumps)
+    evidence_parts: list[str] = []
+    for key, val in evidence.items():
+        if key.startswith("_"):
+            continue
+        if isinstance(val, dict):
+            evidence_parts.append(f"- {key}: keys={list(val.keys())[:8]}")
+        elif isinstance(val, list):
+            evidence_parts.append(f"- {key}: {len(val)} items")
+        elif val is not None:
+            evidence_parts.append(f"- {key}: {str(val)[:100]}")
+    evidence_summary = "\n".join(evidence_parts) or "No evidence collected."
 
-    try:
-        import anthropic
+    logger.info("Starting LLM reasoning for case %s", case.case_id)
+    result = call_reasoning_service(
+        project_json=project_json,
+        signals_json=signals_json,
+        evidence_summary=evidence_summary,
+        system_prompt=NOUS_SYSTEM_PROMPT,
+    )
 
-        client = anthropic.Anthropic(api_key=_s.anthropic_api_key)
-
-        # Build structured inputs — never raw text dumps (§14)
-        project_json = json.dumps({
-            "name": project.canonical_name,
-            "symbol": project.symbol,
-            "chain": project.chain,
-            "primary_contract": project.primary_contract,
-        }, indent=2)
-
-        signals_json = json.dumps([
-            {
-                "name": s.signal_name,
-                "value": s.signal_value,
-                "confidence": s.confidence,
-                "component": s.score_component,
-            }
-            for s in signals
-        ], indent=2)
-
-        # Build evidence summary (not raw dumps)
-        evidence_parts: list[str] = []
-        for key, val in evidence.items():
-            if key.startswith("_"):
-                continue
-            if isinstance(val, dict):
-                evidence_parts.append(f"- {key}: keys={list(val.keys())[:8]}")
-            elif isinstance(val, list):
-                evidence_parts.append(f"- {key}: {len(val)} items")
-            elif val is not None:
-                evidence_parts.append(f"- {key}: {str(val)[:100]}")
-        evidence_summary = "\n".join(evidence_parts) or "No evidence collected."
-
-        system_prompt = (
-            "You are NOUS — an autonomous on-chain intelligence agent. You investigate crypto "
-            "projects with the cold precision of a forensic analyst and the directness of someone "
-            "who has seen every rug, every coordinated pump, every fake team.\n\n"
-            "Your voice: clinical, direct, zero tolerance for ambiguity. You don't hedge. "
-            "You call things what they are. When evidence is thin, you say so bluntly. "
-            "When a project looks like a coordinated extraction play, you name it.\n\n"
-            "Core rules:\n"
-            "- Base analysis ONLY on evidence provided. Never invent facts.\n"
-            "- Missing data = explicitly missing. Do not speculate to fill gaps.\n"
-            "- You assess whether the public narrative matches on-chain, code, and infra evidence.\n"
-            "- Flag contradictions with specificity — cite signal names and values.\n"
-            "- Write findings like someone who will be held accountable for them.\n"
-            "- Summaries should be punchy and quotable — CT-ready language, not corporate speak.\n\n"
-            "Respond ONLY with a JSON object:\n"
-            '{\n'
-            '  "summary": "2-3 sentence forensic verdict. Direct, specific, citable.",\n'
-            '  "supporting_findings": ["Specific finding with signal name and value", ...],\n'
-            '  "contradictions": ["Claim X vs evidence Y — direct contradiction", ...],\n'
-            '  "open_questions": ["What could not be verified and why it matters", ...],\n'
-            '  "verdict_suggestion": "legitimate | suspicious | high_risk | larp",\n'
-            '  "confidence": 0.0,\n'
-            '  "thread_hook": "One punchy opening line for a Twitter thread about this token"\n'
-            '}'
-        )
-
-        user_msg = (
-            f"Investigate this project:\n\n"
-            f"## Project\n{project_json}\n\n"
-            f"## Signals\n{signals_json}\n\n"
-            f"## Evidence Summary\n{evidence_summary}\n\n"
-            f"Produce your forensic investigation findings as JSON."
-        )
-
-        logger.info("Calling LLM for reasoning on case %s...", case.case_id)
-        response = client.messages.create(
-            model=_s.llm_model,
-            max_tokens=2000,
-            system=system_prompt,
-            messages=[{"role": "user", "content": user_msg}],
-        )
-
-        raw_text = response.content[0].text.strip()
-        if raw_text.startswith("```"):
-            raw_text = raw_text.split("\n", 1)[1]
-            if raw_text.endswith("```"):
-                raw_text = raw_text[:-3]
-            raw_text = raw_text.strip()
-
-        parsed = json.loads(raw_text)
+    if result:
         logger.info("LLM reasoning complete for case %s", case.case_id)
-        return parsed
+    else:
+        logger.warning("LLM reasoning unavailable for case %s", case.case_id)
 
-    except Exception as exc:
-        logger.warning("LLM reasoning failed (non-fatal): %s", exc)
-        return None
+    return result
 
 
 def _format_bags_for_report(bags: dict[str, Any] | None) -> dict[str, Any] | None:

@@ -15,6 +15,10 @@ from packages.common.config import settings
 from packages.common.database import get_sync_session
 from packages.common.enums import CaseStatus
 from packages.common.models import Case, Project, RawEvidence, Signal
+from packages.common.reasoning_core import (
+    INVESTIGATION_SYSTEM_PROMPT,
+    call_reasoning_service,
+)
 from packages.common.schemas import ReasoningOutput
 
 logger = logging.getLogger(__name__)
@@ -118,12 +122,14 @@ def generate_verdict(self, case_id: str) -> dict:
             evidence_summary = _build_evidence_summary(evidence)
             graph_context = _build_graph_context(project)
 
-            # Call LLM
-            reasoning_output = _call_llm(
+            # Call LLM via shared reasoning service
+            logger.info("Calling unified reasoning service for case %s", case_id)
+            reasoning_output = call_reasoning_service(
                 project_json=project_json,
                 signals_json=signals_json,
                 evidence_summary=evidence_summary,
                 graph_context=graph_context,
+                system_prompt=INVESTIGATION_SYSTEM_PROMPT,
             )
 
             # Store the reasoning output alongside the case
@@ -193,56 +199,3 @@ def _build_graph_context(project: Project | None) -> str:
         return "Graph context unavailable due to query error."
 
 
-def _call_llm(
-    project_json: str,
-    signals_json: str,
-    evidence_summary: str,
-    graph_context: str,
-) -> dict[str, Any] | None:
-    """Call the Anthropic API for investigation reasoning."""
-
-    if not settings.anthropic_api_key:
-        logger.warning("No ANTHROPIC_API_KEY set — skipping LLM reasoning")
-        return None
-
-    try:
-        import anthropic
-
-        client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
-
-        user_message = INVESTIGATION_USER_TEMPLATE.format(
-            project_json=project_json,
-            signals_json=signals_json,
-            evidence_summary=evidence_summary,
-            graph_context=graph_context,
-        )
-
-        response = client.messages.create(
-            model=settings.llm_model,
-            max_tokens=2000,
-            system=INVESTIGATION_SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": user_message}],
-        )
-
-        # Parse JSON from response
-        raw_text = response.content[0].text.strip()
-
-        # Strip markdown code fences if present
-        if raw_text.startswith("```"):
-            raw_text = raw_text.split("\n", 1)[1]
-            if raw_text.endswith("```"):
-                raw_text = raw_text[:-3]
-            raw_text = raw_text.strip()
-
-        parsed = json.loads(raw_text)
-
-        # Validate structure
-        output = ReasoningOutput(**parsed)
-        return output.model_dump()
-
-    except json.JSONDecodeError:
-        logger.error("LLM returned invalid JSON")
-        return None
-    except Exception as exc:
-        logger.exception("LLM call failed: %s", exc)
-        return None
