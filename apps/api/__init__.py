@@ -1,0 +1,1 @@
+"""Investigator API — FastAPI application."""
