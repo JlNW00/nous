@@ -73,7 +73,8 @@ CATEGORIES: list[ScoreCategory] = [
         name="capital_lineage_quality",
         max_points=10,
         signals=[
-            SignalName.CAPITAL_ORIGIN_SCORE.value,
+            SignalName.NARRATIVE_CONSISTENCY.value,
+            SignalName.DEPLOYER_REPUTATION.value,
         ],
     ),
     ScoreCategory(

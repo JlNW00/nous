@@ -36,6 +36,9 @@ export const SIGNAL_LABELS: Record<string, string> = {
   engagement_authenticity: "Engagement Authenticity",
   backend_presence: "Backend Presence",
   narrative_consistency: "Narrative Consistency",
+  bags_launched: "Bags Launch Status",
+  bags_lifetime_fees: "Bags Lifetime Fees",
+  bags_trading_volume: "Bags Trading Volume",
 };
 
 export const NODE_COLORS: Record<GraphNodeType, string> = {

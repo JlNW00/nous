@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Shield } from "lucide-react";
+import { Shield, Activity } from "lucide-react";
 
 export function SiteHeader() {
   return (
@@ -9,6 +9,15 @@ export function SiteHeader() {
           <Shield className="h-5 w-5 text-primary" />
           <span>Crypto Investigator</span>
         </Link>
+        <nav className="flex items-center gap-4">
+          <Link
+            href="/feed"
+            className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
+          >
+            <Activity className="h-4 w-4" />
+            <span>Feed</span>
+          </Link>
+        </nav>
       </div>
     </header>
   );

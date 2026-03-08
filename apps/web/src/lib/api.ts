@@ -22,3 +22,27 @@ export async function investigate(req: InvestigateRequest): Promise<InvestigateR
   }
   return res.json();
 }
+
+export interface FeedItem {
+  case_id: string;
+  project_name: string;
+  symbol: string | null;
+  chain: string;
+  primary_contract: string | null;
+  verdict: string;
+  credibility_score: number;
+  confidence: number | null;
+  version: number;
+  published_at: string;
+  bags_launched: boolean;
+  bags_trade_url: string | null;
+  top_findings: string[];
+}
+
+export async function getFeed(limit: number = 20): Promise<FeedItem[]> {
+  const res = await fetch(`${API_BASE}/feed?limit=${limit}`, {
+    cache: "no-store",
+  });
+  if (!res.ok) throw new Error(`Feed fetch failed: ${res.status}`);
+  return res.json();
+}
