@@ -103,8 +103,8 @@ def run_investigation(db: Session, case: Case, project: Project) -> dict[str, An
         case_id=case.case_id,
         version=1,
         verdict=scoring_result.verdict.value,
-        credibility_score=scoring_result.total_score,
-        confidence=scoring_result.overall_confidence,
+        credibility_score=scoring_result.risk_score,
+        confidence=scoring_result.coverage,
         report_json=report_json,
     )
     db.add(report)
@@ -122,9 +122,12 @@ def run_investigation(db: Session, case: Case, project: Project) -> dict[str, An
     db.flush()
 
     logger.info(
-        "Investigation complete: score=%.1f verdict=%s",
-        scoring_result.total_score,
+        "Investigation complete: risk_score=%.1f coverage=%.0f%% verdict=%s (raw_total=%.1f/%s)",
+        scoring_result.risk_score,
+        scoring_result.coverage * 100,
         scoring_result.verdict.value,
+        scoring_result.total_score,
+        scoring_result.assessed_max,
     )
 
     return report_json
@@ -575,15 +578,20 @@ def _calculate_signals(
         signals.append(sig)
 
     # ── Bags signals ─────────────────────────────────────────────────
+    # Only emit bags signals when the token IS a Bags launch.
+    # Non-Bags tokens: no signal emitted = missing (neutral), NOT penalized.
     bags = evidence.get("bags", {})
+    is_bags = False
     if bags:
         is_bags = bags.get("bags_launched", False) or bags.get("bags_launched_helius", False)
+
+    if is_bags:
         sig = Signal(
             case_id=case.case_id,
             signal_name=SignalName.BAGS_LAUNCHED.value,
-            signal_value=0.8 if is_bags else 0.0,
+            signal_value=0.8,
             score_component="token_structure_liquidity",
-            confidence=0.9 if bags.get("bags_launched") else 0.5,
+            confidence=0.9 if bags.get("bags_launched") else 0.7,
         )
         db.add(sig)
         signals.append(sig)
@@ -638,7 +646,7 @@ def _calculate_signals(
         # Short chain = direct/traceable = better reputation
         # Long/deep chain = layered obfuscation = worse reputation
         if depth == 0:
-            rep_score, rep_conf = 0.4, 0.3   # no chain data = neutral lean negative
+            rep_score, rep_conf = 0.5, 0.25  # no chain data = neutral, low confidence
         elif depth == 1:
             rep_score, rep_conf = 0.7, 0.55  # one direct hop = clean
         elif depth == 2:
@@ -678,13 +686,14 @@ def _calculate_signals(
         db.add(sig)
         signals.append(sig)
     elif deployer:
-        # Couldn't trace = slightly suspicious
+        # Deployer found but funding untraceable — neutral, not negative.
+        # Low confidence reflects incomplete data, not bad data.
         sig = Signal(
             case_id=case.case_id,
             signal_name=SignalName.CAPITAL_ORIGIN_SCORE.value,
-            signal_value=0.3,
+            signal_value=0.5,
             score_component="capital_lineage_quality",
-            confidence=0.3,
+            confidence=0.25,
         )
         db.add(sig)
         signals.append(sig)
@@ -989,12 +998,30 @@ def _build_report(
     market = evidence.get("market", {})
     token_meta = evidence.get("token_metadata", {})
 
+    # Build coverage explanation for missing data sources
+    no_data_categories = [
+        cs.name for cs in scoring_result.category_scores if not cs.has_data
+    ]
+    coverage_pct = round(scoring_result.coverage * 100)
+
+    if coverage_pct >= 80:
+        coverage_note = "High evidence coverage."
+    elif coverage_pct >= 50:
+        coverage_note = f"Moderate coverage ({coverage_pct}%). Missing: {', '.join(no_data_categories)}."
+    else:
+        coverage_note = (
+            f"Low coverage ({coverage_pct}%) — verdict confidence is limited. "
+            f"Missing: {', '.join(no_data_categories)}."
+        )
+
     report: dict[str, Any] = {
         "executive_summary": (
             f"Automated credibility assessment for {project.canonical_name} "
             f"({project.symbol or 'N/A'}) on {project.chain}. "
-            f"Score: {scoring_result.total_score}/100. "
-            f"Verdict: {scoring_result.verdict.value.upper()}."
+            f"Risk score: {scoring_result.risk_score}/100 "
+            f"(based on {coverage_pct}% evidence coverage). "
+            f"Verdict: {scoring_result.verdict.value.upper()}. "
+            f"{coverage_note}"
         ),
         "project": {
             "name": project.canonical_name,
@@ -1004,6 +1031,8 @@ def _build_report(
             "description": token_meta.get("description"),
             "image": token_meta.get("image_url"),
         },
+        "risk_score": scoring_result.risk_score,
+        "coverage": scoring_result.coverage,
         "credibility_score": scoring_result.total_score,
         "verdict": scoring_result.verdict.value,
         "overall_confidence": scoring_result.overall_confidence,
@@ -1013,6 +1042,7 @@ def _build_report(
                 "earned": cs.earned_points,
                 "max": cs.max_points,
                 "confidence": cs.confidence,
+                "has_data": cs.has_data,
             }
             for cs in scoring_result.category_scores
         ],
@@ -1039,7 +1069,9 @@ def _build_report(
             "funding_chain": evidence.get("funding_chain", []),
         },
         "top_holders": evidence.get("top_holders", [])[:10],
-        "missing_data": scoring_result.missing_signals,
+        "missing_signals": scoring_result.missing_signals,
+        "no_data_categories": no_data_categories,
+        "assessed_max": scoring_result.assessed_max,
         "github": {
             "repo": evidence.get("github_repo"),
             "commits_28d": (evidence.get("github_commits") or {}).get("commit_count_28d"),

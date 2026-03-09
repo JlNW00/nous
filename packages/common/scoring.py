@@ -1,7 +1,9 @@
 """Scoring framework — §13 of the spec.
 
-Each category has a bounded score. The final credibility score is the sum.
-Verdict bands map the total to a human-readable label.
+Each category has a bounded score. The final credibility score normalizes
+to the assessable evidence only, separating risk from coverage.
+
+Key design rule: Missing data is NOT equivalent to bad data.
 """
 
 from __future__ import annotations
@@ -74,7 +76,7 @@ CATEGORIES: list[ScoreCategory] = [
         max_points=10,
         signals=[
             SignalName.NARRATIVE_CONSISTENCY.value,
-            SignalName.DEPLOYER_REPUTATION.value,
+            SignalName.CAPITAL_ORIGIN_SCORE.value,
         ],
     ),
     ScoreCategory(
@@ -82,6 +84,7 @@ CATEGORIES: list[ScoreCategory] = [
         max_points=5,
         signals=[
             SignalName.NARRATIVE_CONSISTENCY.value,
+            SignalName.NARRATIVE_PUMP_SIGNAL.value,
         ],
     ),
 ]
@@ -92,12 +95,25 @@ TOTAL_MAX = sum(c.max_points for c in CATEGORIES)  # 100
 # ── Verdict Bands ───────────────────────────────────────────────────────────
 
 
-def verdict_from_score(score: float) -> Verdict:
-    if score >= 80:
+def verdict_from_score(risk_score: float, coverage: float) -> Verdict:
+    """
+    Determine verdict from risk_score (0-100 normalized to assessed data).
+
+    When coverage is very low (<30%), we refuse to issue a strong verdict
+    and cap at SUSPICIOUS — incomplete evidence should not condemn.
+    """
+    if coverage < 0.30:
+        # Too little data to make a strong call either way
+        if risk_score >= 70:
+            return Verdict.LEGITIMATE
+        else:
+            return Verdict.SUSPICIOUS  # cap — don't condemn on thin evidence
+
+    if risk_score >= 75:
         return Verdict.LEGITIMATE
-    elif score >= 60:
+    elif risk_score >= 55:
         return Verdict.SUSPICIOUS
-    elif score >= 35:
+    elif risk_score >= 30:
         return Verdict.HIGH_RISK
     else:
         return Verdict.LARP
@@ -120,20 +136,27 @@ class CategoryScore:
     earned_points: float
     contributing_signals: list[str]
     confidence: float
+    has_data: bool  # True if at least one signal contributed
 
 
 @dataclass
 class ScoringResult:
-    total_score: float
+    # Primary outputs
+    risk_score: float           # 0-100, normalized to ASSESSED categories only
+    coverage: float             # 0.0-1.0, fraction of max_points with data
     verdict: Verdict
+
+    # Backward compat + detail
+    total_score: float          # Raw sum of earned points (old field)
     overall_confidence: float
     category_scores: list[CategoryScore]
     missing_signals: list[str]
+    assessed_max: float         # How many points were actually assessable
 
 
 def _normalize_signal(signal_name: str, value: float | None) -> float:
     """
-    Map a raw signal value to a 0.0–1.0 range.
+    Map a raw signal value to a 0.0-1.0 range.
 
     Convention from §10:
     - "higher is better" signals: normalized as-is (already 0-1 or clamped).
@@ -147,7 +170,7 @@ def _normalize_signal(signal_name: str, value: float | None) -> float:
         SignalName.RELATED_RUG_COUNT.value,
     }
 
-    # Clamp to 0–1 if the signal calculator already outputs that range.
+    # Clamp to 0-1 if the signal calculator already outputs that range.
     clamped = max(0.0, min(1.0, value))
 
     if signal_name in INVERTED:
@@ -158,9 +181,10 @@ def _normalize_signal(signal_name: str, value: float | None) -> float:
 
 def compute_score(signals: list[SignalInput]) -> ScoringResult:
     """
-    Compute the full credibility score from a list of signal inputs.
+    Compute credibility score from signal inputs.
 
-    Returns bounded sub-scores per category and a final verdict.
+    Key change: risk_score normalizes only to categories that have data.
+    Missing categories reduce coverage, NOT risk_score.
     """
     signal_map: dict[str, SignalInput] = {s.signal_name: s for s in signals}
     category_scores: list[CategoryScore] = []
@@ -183,7 +207,9 @@ def compute_score(signals: list[SignalInput]) -> ScoringResult:
             total_weight += weight
             contributing.append(sig_name)
 
-        if total_weight > 0:
+        has_data = total_weight > 0
+
+        if has_data:
             avg_normalized = weighted_sum / total_weight
             earned = avg_normalized * cat.max_points
             cat_confidence = total_weight / len(cat.signals)
@@ -198,20 +224,38 @@ def compute_score(signals: list[SignalInput]) -> ScoringResult:
                 earned_points=round(earned, 2),
                 contributing_signals=contributing,
                 confidence=round(cat_confidence, 2),
+                has_data=has_data,
             )
         )
 
+    # ── Raw total (backward compat) ──────────────────────────────────
     total = sum(cs.earned_points for cs in category_scores)
     total = round(min(total, TOTAL_MAX), 2)
 
-    # Overall confidence: weighted average of category confidences by max_points.
+    # ── Risk score: normalized to assessed categories only ────────────
+    assessed_max = sum(cs.max_points for cs in category_scores if cs.has_data)
+    if assessed_max > 0:
+        risk_score = round((total / assessed_max) * 100, 2)
+    else:
+        risk_score = 0.0
+
+    # ── Coverage: what fraction of the 100-point scale had data ──────
+    coverage = round(assessed_max / TOTAL_MAX, 2) if TOTAL_MAX > 0 else 0.0
+
+    # ── Overall confidence: weighted avg of category confidences ─────
     conf_num = sum(cs.confidence * cs.max_points for cs in category_scores)
     overall_confidence = round(conf_num / TOTAL_MAX, 2) if TOTAL_MAX > 0 else 0.0
 
+    # ── Verdict: based on risk_score + coverage ──────────────────────
+    verdict = verdict_from_score(risk_score, coverage)
+
     return ScoringResult(
+        risk_score=risk_score,
+        coverage=coverage,
+        verdict=verdict,
         total_score=total,
-        verdict=verdict_from_score(total),
         overall_confidence=overall_confidence,
         category_scores=category_scores,
         missing_signals=list(set(missing_signals)),
+        assessed_max=assessed_max,
     )
